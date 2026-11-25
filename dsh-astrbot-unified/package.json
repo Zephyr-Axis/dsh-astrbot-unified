@@ -1,0 +1,41 @@
+{
+  "name": "dsh-astrbot-unified",
+  "version": "0.1.0",
+  "description": "AstrBot ↔ DSH unified bridge: LLM-driven task execution + conversation mirror",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "astrbot",
+    "onebot",
+    "mirror",
+    "bridge"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "dsh": ">=0.2.0-rc.1 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "author": "Zephyr-Axis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zephyr-Axis/dsh-astrbot-unified.git"
+  },
+  "homepage": "https://github.com/Zephyr-Axis/dsh-astrbot-unified#readme",
+  "bugs": {
+    "url": "https://github.com/Zephyr-Axis/dsh-astrbot-unified/issues"
+  }
+}
