@@ -1,0 +1,23 @@
+name: astrbot_plugin_dsh_unified
+display_name: DSH 统一桥
+short_desc: AstrBot 的 LLM 自主判断何时调用 DSH，同时镜像对话
+desc: |
+  一个插件做两件事：
+
+  1. **自主执行**：AstrBot 的 LLM 拥有 `dsh_ask` 工具，自己判断哪些任务
+     该交给本机的 DeepSeek Harness 去做（写代码、跑命令、查系统信息）。
+  2. **对话镜像**：QQ 里的聊天实时同步到 DSH 会话，按群 / 私聊分目录。
+
+  两者用同一个 DSH 会话，调过 `dsh_ask` 的轮次不会重复记录。
+
+  需要 DSH 侧装 `dsh-astrbot-unified`（监听 3188）。
+version: 0.1.0
+author: Zephyr-Axis
+astrbot_version: ">=4.16"
+support_platforms:
+  - aiocqhttp
+tags:
+  - dsh
+  - deepseek-harness
+  - bridge
+  - mirror
