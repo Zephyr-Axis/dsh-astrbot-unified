@@ -1,0 +1,9 @@
+- insert:
+    - id: dsh-astrbot-unified
+      name: dsh-astrbot-unified
+      config:
+        host: 127.0.0.1
+        port: 3188
+        baseCwd: /root/workspace   # 会话目录的根；留空则用 DSH 当前目录
+        sourceTag: "QQ · AstrBot"
+        asTurn: true
