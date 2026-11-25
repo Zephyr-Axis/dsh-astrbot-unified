@@ -1,0 +1,72 @@
+{
+  "enabled": {
+    "description": "启用 DSH 桥",
+    "type": "bool",
+    "default": true
+  },
+  "dsh_url": {
+    "description": "DSH 地址",
+    "hint": "dsh-astrbot-unified 监听的地址，默认 http://127.0.0.1:3188",
+    "type": "string",
+    "default": "http://127.0.0.1:3188"
+  },
+  "token": {
+    "description": "DSH token",
+    "hint": "在 DSH 的 ~/.dsh/dsh-astrbot-unified/config.json 里",
+    "type": "string",
+    "default": ""
+  },
+  "auto_execute": {
+    "description": "允许 LLM 自主调用 DSH",
+    "hint": "开启后 AstrBot 的 LLM 会看到 dsh_ask 工具，自己判断何时把任务交给 DSH",
+    "type": "bool",
+    "default": true
+  },
+  "mirror_enabled": {
+    "description": "对话镜像",
+    "hint": "把 QQ 里的聊天同步到 DSH 会话",
+    "type": "bool",
+    "default": true
+  },
+  "mirror_user_msg": {
+    "description": "镜像用户消息",
+    "type": "bool",
+    "default": true
+  },
+  "mirror_bot_msg": {
+    "description": "镜像助手回复",
+    "hint": "调过 dsh_ask 的轮次会自动跳过，避免重复",
+    "type": "bool",
+    "default": true
+  },
+  "long_result_threshold": {
+    "description": "长结果阈值（字符）",
+    "hint": "DSH 返回超过这个长度时，原样单独发一份，让 LLM 只做简短确认",
+    "type": "int",
+    "default": 1500
+  },
+  "delete_sync_interval_sec": {
+    "description": "删除同步轮询间隔（秒）",
+    "hint": "AstrBot 删对话不发事件，只能轮询发现。默认 300，最小 30，0 = 关闭",
+    "type": "int",
+    "default": 300
+  },
+  "timeout_sec": {
+    "description": "任务超时（秒）",
+    "hint": "按空闲时间算，DSH 还在发心跳就一直等",
+    "type": "int",
+    "default": 900
+  },
+  "allow_groups": {
+    "description": "允许使用的群号",
+    "hint": "空 = 仅管理员",
+    "type": "list",
+    "default": []
+  },
+  "allow_users": {
+    "description": "允许使用的 QQ 号",
+    "hint": "空 = 仅管理员",
+    "type": "list",
+    "default": []
+  }
+}
