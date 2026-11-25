@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# 运行时数据
+mapping.json
+config.json
+*.log
+archive/
+.mirror-backup/
+
+# AstrBot 插件运行时
+data/
+__pycache__/
+*.pyc
