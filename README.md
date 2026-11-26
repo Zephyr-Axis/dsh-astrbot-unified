@@ -54,6 +54,7 @@ dsh-go 和 AstrBot 各自是独立的 proot，文件系统隔离。唯一共享�
 
 - 插件之间用 HTTP，不共享文件
 - 大附件走共享目录 `/sdcard/...`，不走网络传输
+- 想给 AstrBot 容器传文件，放 `/sdcard/Download/` 让它自己去读
 
 **4. 会话 ID 不能靠内建计数器**
 
