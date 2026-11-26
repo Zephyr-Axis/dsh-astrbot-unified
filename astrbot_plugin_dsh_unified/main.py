@@ -11,6 +11,20 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.provider import LLMResponse
 from astrbot.api.star import Context, Star
 
+# 告诉 LLM 共享目录在哪，这样传文件不用人插手
+SHARE_HINT = """
+
+## 与 DSH 共享文件
+
+你和 DeepSeek Harness（DSH）运行在同一台设备上，共享目录是 `/sdcard/Download/`。
+
+- 要**把文件交给 DSH**：写到 `/sdcard/Download/`，然后在任务里告诉它文件名
+- DSH 要**把文件交给你**：它会写在同一个目录，你可以直接读
+- 大文件走这里，不要用 base64 或聊天附件
+
+不需要问用户路径，直接用 `/sdcard/Download/`。
+"""
+
 # 这些任务 DSH 比 AstrBot 更擅长：给 LLM 看，让它自己判断要不要调用
 DSH_TOOL_DESC = (
     "把任务交给本机运行的 DeepSeek Harness（DSH）agent 执行。"
@@ -153,6 +167,17 @@ class DshUnifiedPlugin(Star):
 
     @filter.on_llm_request(priority=100)
     async def on_req(self, event: AstrMessageEvent, req):
+        # 注入共享目录说明（可关）
+        if self._cfg("inject_share_hint", True):
+            try:
+                sp = getattr(req, "system_prompt", None)
+                if isinstance(sp, str) and SHARE_HINT not in sp:
+                    req.system_prompt = sp + SHARE_HINT
+                elif sp is None:
+                    req.system_prompt = SHARE_HINT
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[dsh] 注入提示词失败：{exc}")
+
         if not self._cfg("mirror_enabled", True) or not self._cfg("mirror_user_msg", True):
             return
         text = (event.message_str or "").strip()
