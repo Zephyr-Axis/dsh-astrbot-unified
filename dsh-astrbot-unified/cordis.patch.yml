@@ -7,3 +7,9 @@
         baseCwd: /root/workspace   # 会话目录的根；留空则用 DSH 当前目录
         sourceTag: "QQ · AstrBot"
         asTurn: true
+        astrbotUsername: dsh-bridge   # 反向调 AstrBot 时用的身份；不能是 admins_id 里的号
+        astrbotSessionPrefix: dsh-tmp- # 临时会话前缀，用完就删
+        astrbotCleanup: true           # 问完立刻删 AstrBot 那边的 conversation
+        astrbotTtlHours: 6             # 没删成的兜底：超过这个小时数就扫掉
+        astrbotSweepMinutes: 30        # 兜底扫描间隔
+        astrbotSweepByUsername: false  # 连「没前缀但归属桥接身份」的会话也清（keep 过的不该开）
