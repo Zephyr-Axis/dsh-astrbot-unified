@@ -14,13 +14,28 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Mapping } from './mapping.js'
+import { createAstrBotOps } from './astrbot.js'
 import { TurnRegistry } from './turns.js'
 import { createSessionOps } from './sessions.js'
 
 export const name = 'dsh-astrbot-unified'
 export const inject = ['sessions', 'agents', 'workspaceRegistry', 'sessionPersistence', 'agentPresets']
 
-const DEFAULTS = { host: '127.0.0.1', port: 3188, sourceTag: 'QQ · AstrBot', asTurn: true }
+const DEFAULTS = {
+  host: '127.0.0.1',
+  port: 3188,
+  sourceTag: 'QQ · AstrBot',
+  asTurn: true,
+  // 反向调 AstrBot 时用的临时会话：用完就删，删不掉的按 TTL 兜底
+  astrbotUsername: 'dsh-bridge',
+  astrbotSessionPrefix: 'dsh-tmp-',
+  astrbotCleanup: true,
+  astrbotTtlHours: 6,
+  astrbotSweepMinutes: 30,
+  // 兜底时是否连「没有 dsh-tmp- 前缀、但归属桥接身份」的会话也一起清。
+  // 默认关：keep 过的会话不该被悄悄删掉。手动 /astrbot/sweep 时可以临时开。
+  astrbotSweepByUsername: false,
+}
 
 function dshHome() { return process.env.DSH_HOME || join(homedir(), '.dsh') }
 function dataDir() { return join(dshHome(), 'dsh-astrbot-unified') }
@@ -135,6 +150,7 @@ export function apply(ctx, rawConfig = {}) {
     }
   })
 
+  const astrbot = createAstrBotOps({ configPath: join(dataDir(), 'config.json'), logger })
   const turns = new TurnRegistry()
   const mapping = new Mapping(join(dataDir(), 'mapping.json'))
   const ops = createSessionOps(ctx, mapping, config, logger)
@@ -147,6 +163,26 @@ export function apply(ctx, rawConfig = {}) {
     startServer()
     // 定期清理死回合
     setInterval(() => turns.sweep(), 5 * 60 * 1000).unref?.()
+    // 兜底：进程被杀时临时会话没删掉，按 TTL 扫一遍
+    if (config.astrbotCleanup) {
+      const every = Math.max(5, Number(config.astrbotSweepMinutes) || 30) * 60 * 1000
+      const ttl = Math.max(1, Number(config.astrbotTtlHours) || 6) * 3600 * 1000
+      const sweep = () => astrbot.sweepTemp({
+        prefix: config.astrbotSessionPrefix || 'dsh-tmp-',
+        ttlMs: ttl,
+        username: config.astrbotUsername,
+        byUsername: config.astrbotSweepByUsername === true,
+      }).then((r) => {
+        if (r.deleted.length) logger.info?.('[unified] 清掉 AstrBot 临时会话 %d 条', r.deleted.length)
+      }).catch((err) => {
+        // AstrBot 没起来是常态（手机后台会杀），不要刷屏
+        if (!/fetch failed|ECONNREFUSED|timed out/i.test(String(err?.message))) {
+          logger.warn?.('[unified] 清理 AstrBot 临时会话失败：%s', err?.message ?? err)
+        }
+      })
+      setInterval(sweep, every).unref?.()
+      setTimeout(sweep, 20 * 1000).unref?.()
+    }
   })().catch((err) => logger.error?.('[unified] 启动失败：%s', err?.message ?? err))
 
   async function loadToken() {
@@ -233,7 +269,7 @@ export function apply(ctx, rawConfig = {}) {
         if (req.method === 'GET' && url.pathname === '/health') {
           return json(res, 200, {
             ok: true, plugin: name, host: config.host, port: config.port,
-            capabilities: ['inbound-task', 'mirror-append', 'mirror-reset', 'mirror-archive', 'session-map'],
+            capabilities: ['inbound-task', 'mirror-append', 'mirror-reset', 'mirror-archive', 'session-map', 'astrbot-ask', 'astrbot-cleanup'],
           })
         }
         if (!authed(req)) return json(res, 401, { ok: false, error: 'unauthorized' })
@@ -418,6 +454,97 @@ export function apply(ctx, rawConfig = {}) {
           const ok = await ops.archive(target)
           if (umo && cid) { mapping.drop(umo, cid); await mapping.save() }
           return json(res, 200, { ok, sessionId: target })
+        }
+
+        // ---------- 反向调 AstrBot ----------
+        //
+        // 为什么不直接让 agent curl /api/v1/chat：那样每问一句都会在 AstrBot 里
+        // 留一条 conversation，越积越多还删不掉。这里把「问」和「删」绑在一起。
+
+        // 问 AstrBot 的 LLM，问完就把那条 conversation 删掉
+        if (req.method === 'POST' && url.pathname === '/astrbot/ask') {
+          const body = JSON.parse((await readBody(req)) || '{}')
+          const text = String(body?.text || '').trim()
+          if (!text) return json(res, 400, { ok: false, error: 'text 必填' })
+          const wantUser = String(body.username || config.astrbotUsername)
+          const keep = body.keep === true || body.keepConversation === true
+          // 想保留上下文就自己传 sessionId + keep；默认每次一条新的临时会话
+          const sessionId = String(body.sessionId || (config.astrbotSessionPrefix || 'dsh-tmp-') + randomUUID())
+          let answer = ''
+          let username = wantUser
+          let error = null
+          try {
+            const r = await astrbot.chat({ text, sessionId, username: wantUser })
+            answer = r.text
+            username = r.username      // 可能被换过名，删会话要用生效的那个
+          } catch (err) {
+            error = String(err?.message ?? err)
+          }
+          let cleaned = { deleted: false, reason: 'keep' }
+          if (!keep && config.astrbotCleanup) {
+            try {
+              cleaned = await astrbot.dropSession({ sessionId, username })
+            } catch (err) {
+              // 删不掉不算失败：后台 TTL 扫描会兜底
+              cleaned = { deleted: false, reason: String(err?.message ?? err) }
+              logger?.warn?.('[unified] 删 AstrBot 会话 %s 失败：%s', sessionId, err?.message ?? err)
+            }
+          }
+          if (error) return json(res, 502, { ok: false, error, sessionId, username, cleaned })
+          return json(res, 200, { ok: true, text: answer, sessionId, username, cleaned })
+        }
+
+        // 看看 AstrBot 那边现在有哪些会话（排查用）
+        if (req.method === 'GET' && url.pathname === '/astrbot/conversations') {
+          try {
+            const list = await astrbot.listConversations({ pageSize: 100 })
+            return json(res, 200, {
+              ok: true,
+              count: list.length,
+              conversations: list.map((c) => ({
+                cid: c.cid,
+                user_id: c.user_id,
+                title: c.title,
+                updated_at: c.updated_at,
+                temp: String(c.user_id || '').includes(`!${config.astrbotSessionPrefix || 'dsh-tmp-'}`),
+              })),
+            })
+          } catch (err) {
+            return json(res, 502, { ok: false, error: String(err?.message ?? err) })
+          }
+        }
+
+        // 手动扫一次临时会话（TTL 兜底逻辑，只是现在就跑）
+        if (req.method === 'POST' && url.pathname === '/astrbot/sweep') {
+          const body = JSON.parse((await readBody(req)) || '{}')
+          const ttlMs = Number(body.ttlMs ?? (Number(config.astrbotTtlHours) || 6) * 3600 * 1000)
+          try {
+            const r = await astrbot.sweepTemp({
+              prefix: config.astrbotSessionPrefix || 'dsh-tmp-',
+              ttlMs: Math.max(0, ttlMs),
+              username: config.astrbotUsername,
+              byUsername: body.byUsername === true || config.astrbotSweepByUsername === true,
+            })
+            return json(res, 200, { ok: true, ...r })
+          } catch (err) {
+            return json(res, 502, { ok: false, error: String(err?.message ?? err) })
+          }
+        }
+
+        // 指定 session_id 删一条
+        if (req.method === 'POST' && url.pathname === '/astrbot/drop') {
+          const body = JSON.parse((await readBody(req)) || '{}')
+          const sessionId = String(body?.sessionId || '').trim()
+          if (!sessionId) return json(res, 400, { ok: false, error: 'sessionId 必填' })
+          try {
+            const r = await astrbot.dropSession({
+              sessionId,
+              username: String(body.username || config.astrbotUsername),
+            })
+            return json(res, 200, { ok: true, ...r })
+          } catch (err) {
+            return json(res, 502, { ok: false, error: String(err?.message ?? err) })
+          }
         }
 
         return json(res, 404, { ok: false, error: 'not found' })
