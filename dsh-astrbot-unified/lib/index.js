@@ -338,9 +338,8 @@ export function apply(ctx, rawConfig = {}) {
           if (!text) return json(res, 400, { ok: false, error: 'text 必填' })
           const { sessionId, created } = await ops.ensureSession(umo, cid, { cwd: body.cwd })
           if (role === 'assistant') {
-            // turnNo 不传：镜像的两次请求之间没有活着的回合对象，
-            // 让 sessions.js 从日志里取「最后一轮 + 1」，否则每轮都会写成 1
-            await ops.appendAsTurn(sessionId, { text, provider: 'astrbot', model: config.sourceTag })
+            const n = (turns.get(sessionId)?.turnNo ?? 0) + 1
+            await ops.appendAsTurn(sessionId, { text, turnNo: n, provider: 'astrbot', model: config.sourceTag })
           } else {
             await ops.appendUserMessage(sessionId, text)
           }
