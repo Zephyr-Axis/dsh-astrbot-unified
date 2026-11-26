@@ -162,7 +162,7 @@ export function apply(ctx, rawConfig = {}) {
       token,
       astrbot_url: 'http://127.0.0.1:6185',
       astrbot_key: '',
-      _note: 'astrbot_key 需要在 AstrBot WebUI 里创建（设置 → API Key，勾 im 和 chat）',
+      _note: 'astrbot_key 需要在 AstrBot WebUI 里创建（设置 → API Key，勾 im、chat；要让它执行命令还要勾 chat:admin）',
     }, null, 2), { mode: 0o600 })
     return token
   }
