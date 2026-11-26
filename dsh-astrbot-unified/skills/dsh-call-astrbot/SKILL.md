@@ -53,7 +53,17 @@ conversation 删掉。
 -d '{"text":"接着说","sessionId":"dsh-tmp-keep-1","keep":true}'
 ```
 
-`keep` 的会话不会被自动删，要删手动 `POST /astrbot/drop {"sessionId":"..."}`。
+`keep` 的会话不会被自动删。要让「DSH 那边删了才跟着删」，绑定一下：
+
+```bash
+-d '{"text":"接着说","sessionId":"dsh-keep-topic1","keep":true,"dshSessionId":"'"$DSH_SESSION_ID"'"}'
+```
+
+`$DSH_SESSION_ID` 是宿主给你的环境变量，就是当前会话的 id。
+绑好之后 DSH 会话被归档/删除时，它名下的 AstrBot conversation 会一起删掉——
+这就是「确定会话没用了才删」。查绑定 `GET /astrbot/binds`，
+手动触发 `POST /astrbot/drop-bound {"dshSessionId":"..."}`。
+不绑定也行，那就得自己 `POST /astrbot/drop {"sessionId":"..."}` 收尾。
 
 `username` 不能填 AstrBot 管理员（`admins_id` 里的号），否则会报
 `username is reserved for an AstrBot administrator`；用一个自己的名字即可，
