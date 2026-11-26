@@ -7,10 +7,12 @@
 // 只监听 127.0.0.1。
 
 import { createServer } from 'node:http'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { Mapping } from './mapping.js'
 import { TurnRegistry } from './turns.js'
 import { createSessionOps } from './sessions.js'
@@ -23,10 +25,116 @@ const DEFAULTS = { host: '127.0.0.1', port: 3188, sourceTag: 'QQ · AstrBot', as
 function dshHome() { return process.env.DSH_HOME || join(homedir(), '.dsh') }
 function dataDir() { return join(dshHome(), 'dsh-astrbot-unified') }
 
+
+const SKILL_NAME = 'dsh-call-astrbot'
+const SKILL_PROVIDER = 'dsh-astrbot-unified'
+const SKILL_RANK = 50
+
+/**
+ * DSH 对技能元数据的硬性要求（dsh-skill 的 validateCandidate / validateDefinition）。
+ * 关键：DSH 只在 provider.list() 外面包了 try/catch，validateCandidate 本身没包，
+ * 所以一条不合格的候选会让整轮对话直接失败。这里先在本地过一遍，坏数据不出门。
+ */
+function skillProblems(candidate, { needsRank = false, needsContent = false } = {}) {
+  const bad = []
+  if (typeof candidate.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.name)) bad.push('name')
+  if (typeof candidate.description !== 'string' || candidate.description.length === 0) bad.push('description')
+  if (typeof candidate.source !== 'string') bad.push('source')
+  if (candidate.provider !== SKILL_PROVIDER) bad.push('provider')
+  // rank 只用于候选排序；加载完整定义时 DSH 不要求它
+  if (needsRank && (typeof candidate.rank !== 'number' || !Number.isFinite(candidate.rank))) bad.push('rank')
+  if (candidate.whenToUse !== undefined && typeof candidate.whenToUse !== 'string') bad.push('whenToUse')
+  const invocation = candidate.invocation
+  if (
+    invocation === null || typeof invocation !== 'object' ||
+    typeof invocation.modelInvocable !== 'boolean' ||
+    typeof invocation.userInvocable !== 'boolean'
+  ) bad.push('invocation')
+  if (needsContent && (typeof candidate.content !== 'string' || candidate.content.length === 0)) bad.push('content')
+  return bad
+}
+
+/** 读 SKILL.md 并缓存成功结果；读失败不缓存，下次刷新技能时会重试。 */
+function bundledCallAstrbotSkill(logger) {
+  let cached = null
+  const load = () => {
+    if (cached !== null) return cached
+    const path = resolve(dirname(fileURLToPath(import.meta.url)), `../skills/${SKILL_NAME}/SKILL.md`)
+    const raw = readFileSync(path, 'utf8')
+    // 解析 frontmatter
+    const end = raw.indexOf('\n---\n', 4)
+    const fm = end > 0 ? raw.slice(4, end) : ''
+    const descMatch = fm.match(/^description:\s*"([^"]+)"/m) || fm.match(/^description:\s*(.+)$/m)
+    const description = descMatch ? descMatch[1].trim() : 'Call AstrBot from DSH'
+    const content = end > 0 ? raw.slice(end + 5) : raw
+    return (cached = {
+      meta: {
+        name: SKILL_NAME,
+        description,
+        source: 'bundled',
+        provider: SKILL_PROVIDER,
+        invocation: { modelInvocable: true, userInvocable: true },
+      },
+      path,
+      content,
+    })
+  }
+  const warn = (what, detail) => {
+    // 自己拼好字符串，不依赖各版本 logger 的 printf 支持
+    const text = typeof detail === 'string' ? detail : (detail?.message ?? String(detail))
+    logger?.warn?.(`[unified] 技能「${SKILL_NAME}」不可用（${what}）：${text}`)
+  }
+
+  return {
+    name: SKILL_PROVIDER,
+    // 任何异常都降级成「暂时没有这个技能」，绝不把问题抛给 DSH 的整轮对话
+    list() {
+      try {
+        const { meta, path } = load()
+        const candidate = { ...meta, rank: SKILL_RANK, locator: path }
+        const bad = skillProblems(candidate, { needsRank: true })
+        if (bad.length) {
+          warn('元数据不合格', bad.join('、'))
+          return []
+        }
+        return [candidate]
+      } catch (err) {
+        warn('读取失败', err)
+        return []
+      }
+    },
+    get() {
+      try {
+        const { meta, content } = load()
+        const definition = { ...meta, content }
+        const bad = skillProblems(definition, { needsContent: true })
+        if (bad.length) {
+          warn('定义不合格', bad.join('、'))
+          return undefined
+        }
+        return definition
+      } catch (err) {
+        warn('读取失败', err)
+        return undefined
+      }
+    },
+  }
+}
+
 export function apply(ctx, rawConfig = {}) {
   const config = { ...DEFAULTS, ...rawConfig }
   const logger = ctx.logger(name)
   const state = { token: '', server: null }
+
+  // 注册「调用 AstrBot」的技能，让 agent 知道怎么反向调 AstrBot
+  ctx.inject(['skills'], (skillCtx) => {
+    try {
+      skillCtx.skills.registerProvider(() => bundledCallAstrbotSkill(logger))
+    } catch (err) {
+      logger?.warn?.('[unified] 注册 skill 失败：%s', err?.message ?? err)
+    }
+  })
+
   const turns = new TurnRegistry()
   const mapping = new Mapping(join(dataDir(), 'mapping.json'))
   const ops = createSessionOps(ctx, mapping, config, logger)
@@ -49,7 +157,13 @@ export function apply(ctx, rawConfig = {}) {
     } catch { /* 不存在就建 */ }
     const token = randomBytes(24).toString('hex')
     await mkdir(dataDir(), { recursive: true })
-    await writeFile(p, JSON.stringify({ token }, null, 2), { mode: 0o600 })
+    // 顺便生成 AstrBot 侧的占位配置，让用户知道要填什么
+    await writeFile(p, JSON.stringify({
+      token,
+      astrbot_url: 'http://127.0.0.1:6185',
+      astrbot_key: '',
+      _note: 'astrbot_key 需要在 AstrBot WebUI 里创建（设置 → API Key，勾 im 和 chat）',
+    }, null, 2), { mode: 0o600 })
     return token
   }
 
