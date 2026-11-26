@@ -377,6 +377,22 @@ GET  /orphans        列出磁盘上有、映射里没有的 qq 会话
 POST /clean-orphans  一键归档所有孤儿
 ```
 
+### 13. `/api/v1/chat` 的 `username` 不能是管理员
+
+调 AstrBot 的 Open API 聊天接口时，`username` 如果等于 `admins_id` 里的任何一个号，
+会直接被拒：
+
+```
+username is reserved for an AstrBot administrator
+```
+
+这不是「没权限」，是「冒充管理员」的防越权判断（`open_api_service.py`
+里的 `allow_admin_username` 分支）。用一个自己的名字就行，它同时也是 AstrBot 侧的会话归属，
+后面 `session_id` 也归在这个名字下，换名字等于换会话。
+
+顺带：这个接口是 SSE，`plain` 事件里同时混着 `chain_type: "reasoning"` 的思维链片段，
+只拼 `streaming` 的 `plain` 会把思考过程也打出来，要按 `chain_type` 过滤。
+
 ## 已知限制
 
 - **DSH 侧无法真删会话**，只有归档（`workspaceRegistry.archiveSession`）。JSONL 仍留在磁盘。
