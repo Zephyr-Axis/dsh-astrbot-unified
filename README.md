@@ -66,6 +66,19 @@ DSH 内建的 `session-${++counter}` 计数器在进程内存里，dsh-go 重启
 sessionId: `session-${randomUUID()}`
 ```
 
+### 文件共享：`/sdcard/Download/`
+
+两个容器都挂载了 Android 的外部存储，所以**文件互传不需要人插手**：
+
+| 方向 | 做法 |
+| --- | --- |
+| AstrBot → DSH | 写到 `/sdcard/Download/`，告诉 DSH 文件名 |
+| DSH → AstrBot | 写到同一目录，AstrBot 直接读 |
+
+两边插件都注入了提示词，LLM 知道这个目录的存在，不会问你「放哪」。
+
+**大文件走这里，不要用 base64 或聊天附件**——没有大小限制，也不消耗上下文。
+
 ### 推荐配置
 
 ```yaml
@@ -110,7 +123,27 @@ DSH agent：du -sh /root/* | sort -h
 
 不需要记命令、不需要加前缀。DSH 能真实读写文件、执行 shell、跑测试。
 
-### 2. 对话镜像
+### 2. DSH 的 agent 也能反过来调 AstrBot
+
+装好插件后，DSH 的 agent 会自动获得一个技能（`dsh-call-astrbot`），学会：
+
+| 能力 | 怎么用 |
+| --- | --- |
+| 让 AstrBot 的 LLM 回答 | 走它的 `/api/v1/chat`，带人格和工具 |
+| 往 QQ 发消息 | 走它的 `/api/v1/im/messages` |
+| 查 AstrBot 的会话列表 | 走 `/api/v1/conversations` |
+
+你只需要在 `~/.dsh/dsh-astrbot-unified/config.json` 里填 `astrbot_key`
+（在 AstrBot WebUI 里创建，勾 `im` 和 `chat` 权限）。
+
+这样两个 agent 互相可调：
+
+```
+AstrBot ──dsh_ask──▶ DSH      执行任务
+DSH ────curl─────▶ AstrBot   问它 / 发 QQ
+```
+
+### 3. 对话镜像
 
 同时把 QQ 里的聊天同步到 DSH 会话：
 
