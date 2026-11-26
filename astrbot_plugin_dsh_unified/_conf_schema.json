@@ -68,5 +68,11 @@
     "hint": "空 = 仅管理员",
     "type": "list",
     "default": []
+  },
+  "inject_share_hint": {
+    "description": "注入共享目录说明",
+    "hint": "告诉 LLM /sdcard/Download/ 是和 DSH 共享的目录，传文件不用问用户",
+    "type": "bool",
+    "default": true
   }
 }
