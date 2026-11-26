@@ -327,6 +327,8 @@ cd dsh-astrbot-unified
 | GET | `/astrbot/conversations` | 看 AstrBot 那边有哪些会话，标出没清掉的临时会话 |
 | POST | `/astrbot/sweep` | 立刻扫一遍临时会话：`{ttlMs}` |
 | POST | `/astrbot/drop` | 按 sessionId 删一条：`{sessionId, username?}` |
+| GET | `/astrbot/binds` | 看长期会话都绑在哪条 DSH 会话上 |
+| POST | `/astrbot/drop-bound` | DSH 会话没了 → 删它名下所有 AstrBot 会话 |
 
 ## 实现上的坑
 
@@ -377,13 +379,24 @@ source: { kind: 'user', rpcId: randomUUID() }
 
 没有 `rpcId` 的消息**不会渲染成用户气泡**。同一条会话里对比：无 rpcId 的显示为普通文本，有的正常显示气泡。
 
-### 6. 界面只显示有回合的会话
+### 6. 界面只显示有回合的会话，而且用户消息必须在回合**里面**
 
 只有 `user/message` 的会话在列表里不显示。助手回复要包成完整回合：
 
 ```
 turn/start → step/start → assistant/message → step/end → turn/end
 ```
+
+但光这样还不够——**用户消息也得在回合里面**，顺序要跟真实会话一致：
+
+```
+turn/start → step/start → user/message → assistant/message → step/end → turn/end
+```
+
+实测踩到过：用户消息写在回合外面（`user/message` 单独一条、助手回复另起一轮），
+DSH 的 `turnOutline` 会把 prompt 算到下一轮头上，界面上用户气泡就丢了，
+只剩助手回复。而且 `turn` 编号不能每次都写 1——它只认最后一轮，
+前面的轮次会被吞掉。正确做法是读会话日志里最大的 `turn/start` 再 +1。
 
 ### 7. `on_astrbot_loaded` 重载不触发
 
