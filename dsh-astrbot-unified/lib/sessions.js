@@ -249,57 +249,13 @@ export function createSessionOps(ctx, mapping, config, logger) {
    */
 
   /**
-   * 找当前「开着」的回合：最后一条 turn/start 后面没有 turn/end。
-   *
-   * 为什么需要：真实 DSH 会话的顺序是
-   *   turn/start → step/start → user/message → assistant/message → step/end → turn/end
-   * 用户消息在回合**里面**。镜像以前是「user/message 单独写、助手回复另起一个回合」，
-   * 结果 turnOutline 把 prompt 算错、界面上的用户气泡丢了一半（实测）。
-   * 所以现在：用户消息开一个回合但先不收尾，助手回复来的时候再补完。
-   */
-  function openTurn(sessionId) {
-    const s = live(sessionId)
-    const log = s?.log
-    if (!Array.isArray(log)) return null
-    let open = null
-    for (const e of log) {
-      if (e?.type === 'turn/start') {
-        const n = Number(e?.data?.turn)
-        open = Number.isSafeInteger(n) ? { turn: n, step: 0 } : null
-      } else if (e?.type === 'step/start' && open) {
-        const st = Number(e?.data?.step)
-        if (Number.isSafeInteger(st)) open.step = st
-      } else if (e?.type === 'turn/end') {
-        open = null
-      }
-    }
-    return open
-  }
-
-  /** 把开着的回合收尾（上一轮没等到助手回复，或者来了新的用户消息）。 */
-  function closeTurn(s, open) {
-    if (!open) return
-    const step = open.step || 1
-    s.append('step/end', { turn: open.turn, step })
-    s.append('turn/end', { turn: open.turn, reason: { kind: 'completed' } })
-  }
-
-  /**
-   * 写一条用户消息。
-   *
-   * 按真实 DSH 的顺序：回合先开，用户消息在回合里面。
-   * 这样 turnOutline 的 prompt 才会是这条用户消息，界面也才会渲染成用户气泡。
+   * 写一条「真正的用户消息」：user/message + surfaceOp，role=user，source.kind=user。
+   * 这样界面会渲染成用户气泡，跟助手回复明确区分（不像之前两个都包成 assistant）。
    */
   async function appendUserMessage(sessionId, text) {
     const s = live(sessionId)
     if (!s || typeof s.append !== 'function') throw new Error('会话不可写')
-    const open = openTurn(sessionId)
-    if (open) closeTurn(s, open)          // 上一轮没等到回复，先收尾
-    const turn = lastTurnNo(sessionId) + 1
-    const step = 1
-    s.append('turn/start', { turn })
-    s.append('step/start', { turn, step })
-    // 带 rpcId：客户端靠它把消息认成「用户提交的」，没有就不渲染成用户气泡
+    // 带 rpcId：客户端靠它把消息认成「用户提交的」，没有就可能不渲染成用户气泡
     s.append('user/message', {
       id: randomUUID(),
       role: 'user',
@@ -310,44 +266,18 @@ export function createSessionOps(ctx, mapping, config, logger) {
     return true
   }
 
-  /**
-   * 会话里已经用到第几轮了。
-   *
-   * 为什么不能靠内存里的回合表：镜像写入是「用户说一句 → 助手回一句」两次独立请求，
-   * 中间没有活着的回合对象，`turns.get()` 永远是空的，于是每次都写 turn: 1。
-   * 结果 DSH 的 turnOutline 只认最后一轮，界面上前面的轮次被吞掉（实测）。
-   * 所以直接翻会话日志找最大的 turn/start。
-   */
-  function lastTurnNo(sessionId) {
-    const s = live(sessionId)
-    const log = s?.log
-    if (!Array.isArray(log)) return 0
-    let max = 0
-    for (const e of log) {
-      if (e?.type !== 'turn/start') continue
-      const n = Number(e?.data?.turn)
-      if (Number.isSafeInteger(n) && n > max) max = n
-    }
-    return max
-  }
-
   async function appendAsTurn(sessionId, { text, turnNo, provider, model }) {
     const s = live(sessionId)
     if (!s || typeof s.append !== 'function') throw new Error('会话不可写')
 
-    // 用户消息开了回合就接在它里面（prompt 和回复才会归到同一轮）；
-    // 没有开着的回合（比如重启后先收到助手回复）就自己起一个。
-    const open = openTurn(sessionId)
-    const turn = open?.turn ?? (Number.isSafeInteger(turnNo) && turnNo > 0 ? turnNo : lastTurnNo(sessionId) + 1)
-    const step = open?.step || 1
-    if (!open) {
-      s.append('turn/start', { turn })
-      s.append('step/start', { turn, step })
-    }
+    const turn = Number.isSafeInteger(turnNo) ? turnNo : 1
+    const step = 1
     // 关键：assistant/message 的校验强制要求 source.kind === 'model' + provider/model。
     // 标成外部来源会被拒（实测），所以这里如实记成「AstrBot 那边的模型产出的」。
     const src = { kind: 'model', provider: provider || 'astrbot', model: model || 'mirror' }
 
+    s.append('turn/start', { turn })
+    s.append('step/start', { turn, step })
     s.append('assistant/message', {
       turn,
       step,
