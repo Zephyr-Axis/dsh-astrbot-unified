@@ -130,7 +130,7 @@ DSH agent：du -sh /root/* | sort -h
 
 | 能力 | 怎么用 |
 | --- | --- |
-| 让 AstrBot 的 LLM 回答 | 走它的 `/api/v1/chat`，带人格和工具 |
+| 让 AstrBot 的 LLM 回答 | 走本插件的 `/astrbot/ask`（不是 AstrBot 的 `/api/v1/chat`） |
 | 往 QQ 发消息 | 走它的 `/api/v1/im/messages` |
 | 查 AstrBot 的会话列表 | 走 `/api/v1/conversations` |
 
@@ -143,8 +143,43 @@ DSH agent：du -sh /root/* | sort -h
 
 ```
 AstrBot ──dsh_ask──▶ DSH      执行任务
-DSH ────curl─────▶ AstrBot   问它 / 发 QQ
+DSH ────HTTP─────▶ AstrBot   问它 / 发 QQ
 ```
+
+#### 为什么不用 AstrBot 的 `/api/v1/chat`
+
+直接打那个接口，**每问一句都会在 AstrBot 里留一条 conversation**。
+问十次就是十条，全堆在它的对话列表里，还得手动一条条删——
+AstrBot 没有「临时会话」的概念，API 建的会话和真人聊的会话长得一样。
+
+`/astrbot/ask` 把「问」和「删」绑在一起：
+
+```bash
+curl -s -X POST http://127.0.0.1:3188/astrbot/ask \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"问点什么"}'
+```
+
+它每次用一个带前缀的一次性 session（默认 `dsh-tmp-<uuid>`），拿到答案后
+立刻 `DELETE /api/v1/conversations/{cid}` 把那条 conversation 删掉：
+
+```json
+{"ok":true,"text":"...","sessionId":"dsh-tmp-...","cleaned":{"deleted":true,"cid":"..."}}
+```
+
+兜底有两层：
+
+- 删失败不影响答案，只记 `cleaned.deleted: false`
+- 进程被杀、AstrBot 当时没起来……这些漏网的临时会话，后台每 30 分钟
+  按 TTL（默认 6 小时）扫一遍清掉；只认 `dsh-tmp-` 前缀，别的会话一概不碰
+
+要连续追问同一件事（需要 AstrBot 记得上文）就自己传 `sessionId` 加 `keep`：
+
+```bash
+-d '{"text":"接着说","sessionId":"dsh-tmp-keep-1","keep":true}'
+```
+
+`keep` 的会话不自动删，用完手动 `POST /astrbot/drop`。
 
 ### 3. 对话镜像
 
@@ -195,6 +230,13 @@ dsh plugin --profile web add ./dsh-astrbot-unified
         baseCwd: /your/workspace
         sourceTag: "QQ · AstrBot"
         asTurn: true
+        # 反向调 AstrBot 用的身份和临时会话（用完自动删）
+        astrbotUsername: dsh-bridge      # 不能填 admins_id 里的号
+        astrbotSessionPrefix: dsh-tmp-
+        astrbotCleanup: true
+        astrbotTtlHours: 6
+        astrbotSweepMinutes: 30
+        astrbotSweepByUsername: false    # keep 过的不该被清，默认关
 ```
 
 重启 `dsh web`，看到 `[unified] listening on http://127.0.0.1:3188` 即可。
@@ -233,6 +275,12 @@ cd dsh-astrbot-unified
 | `baseCwd` | 当前目录 | 会话目录的根，见下 |
 | `sourceTag` | `QQ · AstrBot` | 消息前缀显示的名字 |
 | `asTurn` | `true` | `true` 伪造回合（界面可见）；`false` 只写记录（界面不显示） |
+| `astrbotUsername` | `dsh-bridge` | 反向调 AstrBot 时用的身份，不能是 `admins_id` 里的号 |
+| `astrbotSessionPrefix` | `dsh-tmp-` | 临时会话前缀，只有带这个前缀的才会被自动清 |
+| `astrbotCleanup` | `true` | 问完立刻删 AstrBot 那边的 conversation |
+| `astrbotTtlHours` | `6` | 兜底：漏掉的临时会话超过这个小时数就扫掉 |
+| `astrbotSweepMinutes` | `30` | 兜底扫描间隔 |
+| `astrbotSweepByUsername` | `false` | 兜底时是否连「没前缀、但归属桥接身份」的会话一起清 |
 
 目录结构：
 
@@ -275,6 +323,10 @@ cd dsh-astrbot-unified
 | POST | `/archive` | 按映射归档单条：`{umo, cid}` 或 `{sessionId}` |
 | POST | `/archive-umo` | **清空整个群**：`{umo}`，含孤儿会话 + 空工作区 |
 | POST | `/clean-orphans` | 清理所有孤儿会话 |
+| POST | `/astrbot/ask` | 问 AstrBot 的 LLM，**问完自动删掉那条 conversation** |
+| GET | `/astrbot/conversations` | 看 AstrBot 那边有哪些会话，标出没清掉的临时会话 |
+| POST | `/astrbot/sweep` | 立刻扫一遍临时会话：`{ttlMs}` |
+| POST | `/astrbot/drop` | 按 sessionId 删一条：`{sessionId, username?}` |
 
 ## 实现上的坑
 
