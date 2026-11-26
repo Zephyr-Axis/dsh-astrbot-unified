@@ -111,16 +111,27 @@ class DshUnifiedPlugin(Star):
                         body = (await resp.aread()).decode("utf-8", "ignore")[:200]
                         logger.warning(f"[dsh] /inbound → HTTP {resp.status_code}: {body}")
                         return f"DSH 拒绝了这次请求（HTTP {resp.status_code}）。"
+                    ev = ""
                     async for line in resp.aiter_lines():
+                        line = line.strip()
+                        if line.startswith("event:"):
+                            ev = line[6:].strip()
+                            continue
                         if not line.startswith("data:"):
                             continue
                         try:
                             data = json.loads(line[5:].strip())
                         except json.JSONDecodeError:
                             continue
-                        t = data.get("text") or data.get("message")
-                        if t:
-                            chunks.append(str(t))
+                        # 只收正文：status 是进度（"已接入 DSH"「第 N 轮开始」），done/error 另算
+                        if ev == "text":
+                            t = data.get("text")
+                            if t:
+                                chunks.append(str(t))
+                        elif ev == "error":
+                            msg = data.get("message") or ""
+                            if msg:
+                                logger.warning(f"[dsh] 回合出错：{msg}")
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"[dsh] 执行失败：{type(exc).__name__}: {exc}")
             return f"执行出错：{type(exc).__name__}"
