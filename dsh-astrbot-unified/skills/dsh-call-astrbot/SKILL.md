@@ -26,7 +26,7 @@ AstrBot 跑在同一台设备的另一个容器里，通过 HTTP 访问。
 KEY=$(python3 -c "import json;print(json.load(open('$HOME/.dsh/dsh-astrbot-unified/config.json'))['astrbot_key'])")
 curl -sN -X POST http://127.0.0.1:6185/api/v1/chat \
   -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"message":[{"type":"plain","text":"你的问题"}],"session_id":"dsh-call","username":"dsh"}' \
+  -d '{"message":[{"type":"plain","text":"你的问题"}],"session_id":"dsh-call","username":"dsh-call"}' \
   | python3 -c "
 import json,sys
 for line in sys.stdin:
@@ -34,11 +34,16 @@ for line in sys.stdin:
     if not line.startswith('data: '): continue
     try: ev=json.loads(line[6:])
     except: continue
-    if ev.get('type')=='plain' and ev.get('streaming'): print(ev.get('data',''),end='')
+    if ev.get('type')=='plain' and ev.get('streaming') and ev.get('chain_type')!='reasoning':
+        print(ev.get('data',''),end='')
 "
 ```
 
 这会走 AstrBot 自己的 LLM（带它的人格和工具），返回流式文本。
+
+`username` 不能填 AstrBot 管理员（`admins_id` 里的号），否则会报
+`username is reserved for an AstrBot administrator`；用一个自己的名字即可，
+它同时也是 AstrBot 侧的会话归属。
 
 ## 往 QQ 发消息
 
