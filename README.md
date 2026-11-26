@@ -390,8 +390,16 @@ turn/start → step/start → assistant/message → step/end → turn/end
 但光这样还不够——**用户消息也得在回合里面**，顺序要跟真实会话一致：
 
 ```
-turn/start → step/start → user/message → assistant/message → step/end → turn/end
+agent/inbox/spliced(next-turn, inserted:[msg])   ← 先投进队列
+turn/start
+agent/inbox/spliced(next-turn, removedCount:1)   ← 出队
+step/start
+user/message                                     ← 同一个 msg 落成 surface
+assistant/message → step/end → turn/end
 ```
+
+少了前面那两条 `agent/inbox/spliced`，**dsh-go 原生界面会把首条用户消息当成
+「唤醒提示」渲染成纯文本，不画气泡**（网页端不挑这个，所以只有 App 上看得出差别）。
 
 实测踩到过：用户消息写在回合外面（`user/message` 单独一条、助手回复另起一轮），
 DSH 的 `turnOutline` 会把 prompt 算到下一轮头上，界面上用户气泡就丢了，
