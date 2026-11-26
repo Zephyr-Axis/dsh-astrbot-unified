@@ -150,7 +150,11 @@ export function apply(ctx, rawConfig = {}) {
     }
   })
 
-  const astrbot = createAstrBotOps({ configPath: join(dataDir(), 'config.json'), logger })
+  const astrbot = createAstrBotOps({
+    configPath: join(dataDir(), 'config.json'),
+    bindsPath: join(dataDir(), 'keep-binds.json'),
+    logger,
+  })
   const turns = new TurnRegistry()
   const mapping = new Mapping(join(dataDir(), 'mapping.json'))
   const ops = createSessionOps(ctx, mapping, config, logger)
@@ -334,8 +338,9 @@ export function apply(ctx, rawConfig = {}) {
           if (!text) return json(res, 400, { ok: false, error: 'text 必填' })
           const { sessionId, created } = await ops.ensureSession(umo, cid, { cwd: body.cwd })
           if (role === 'assistant') {
-            const n = (turns.get(sessionId)?.turnNo ?? 0) + 1
-            await ops.appendAsTurn(sessionId, { text, turnNo: n, provider: 'astrbot', model: config.sourceTag })
+            // turnNo 不传：镜像的两次请求之间没有活着的回合对象，
+            // 让 sessions.js 从日志里取「最后一轮 + 1」，否则每轮都会写成 1
+            await ops.appendAsTurn(sessionId, { text, provider: 'astrbot', model: config.sourceTag })
           } else {
             await ops.appendUserMessage(sessionId, text)
           }
@@ -415,6 +420,18 @@ export function apply(ctx, rawConfig = {}) {
             if (await ops.archive(sid)) archived.push(sid)
           }
           // 清掉映射
+          // DSH 会话要没了，绑在它们名下的 AstrBot 长期会话一起清
+          let dropped = []
+          if (config.astrbotCleanup) {
+            for (const sid of all) {
+              try {
+                const r = await astrbot.dropBound(sid)
+                dropped.push(...(r.deleted || []))
+              } catch (err) {
+                logger?.warn?.('[unified] 清理 %s 的绑定会话失败：%s', sid, err?.message ?? err)
+              }
+            }
+          }
           for (const cid of mapping.cidsOf(umo)) mapping.drop(umo, cid)
           await mapping.save()
 
@@ -438,7 +455,7 @@ export function apply(ctx, rawConfig = {}) {
           logger?.info?.('[unified] 按 umo 清空 %s：归档 %d 个', umo, archived.length)
           return json(res, 200, {
             ok: true, umo, archived, count: archived.length,
-            removedWorkspace,
+            droppedAstrbot: dropped, removedWorkspace,
           })
         }
 
@@ -453,7 +470,16 @@ export function apply(ctx, rawConfig = {}) {
           if (!target) return json(res, 200, { ok: true, skipped: 'no-mapping' })
           const ok = await ops.archive(target)
           if (umo && cid) { mapping.drop(umo, cid); await mapping.save() }
-          return json(res, 200, { ok, sessionId: target })
+          // DSH 会话没了，它名下的 AstrBot 长期会话也没用了
+          let dropped = null
+          if (config.astrbotCleanup) {
+            try {
+              dropped = await astrbot.dropBound(target)
+            } catch (err) {
+              logger?.warn?.('[unified] 清理绑定会话失败：%s', err?.message ?? err)
+            }
+          }
+          return json(res, 200, { ok, sessionId: target, dropped })
         }
 
         // ---------- 反向调 AstrBot ----------
@@ -468,6 +494,9 @@ export function apply(ctx, rawConfig = {}) {
           if (!text) return json(res, 400, { ok: false, error: 'text 必填' })
           const wantUser = String(body.username || config.astrbotUsername)
           const keep = body.keep === true || body.keepConversation === true
+          // 长期会话要绑到某条 DSH 会话上，DSH 那边删了才跟着删。
+          // 必须显式传：宿主的 DSH_SESSION_ID 不是调用方会话，默认成它会绑错人。
+          const dshSessionId = String(body.dshSessionId || '')
           // 想保留上下文就自己传 sessionId + keep；默认每次一条新的临时会话
           const sessionId = String(body.sessionId || (config.astrbotSessionPrefix || 'dsh-tmp-') + randomUUID())
           let answer = ''
@@ -481,7 +510,15 @@ export function apply(ctx, rawConfig = {}) {
             error = String(err?.message ?? err)
           }
           let cleaned = { deleted: false, reason: 'keep' }
-          if (!keep && config.astrbotCleanup) {
+          if (keep && dshSessionId && !error) {
+            // 记下来：这条 AstrBot 会话属于这条 DSH 会话
+            try {
+              await astrbot.bind({ dshSessionId, sessionId, username })
+              cleaned = { deleted: false, reason: 'bound', dshSessionId }
+            } catch (err) {
+              logger?.warn?.('[unified] 记录会话绑定失败：%s', err?.message ?? err)
+            }
+          } else if (!keep && config.astrbotCleanup) {
             try {
               cleaned = await astrbot.dropSession({ sessionId, username })
             } catch (err) {
@@ -526,6 +563,27 @@ export function apply(ctx, rawConfig = {}) {
               byUsername: body.byUsername === true || config.astrbotSweepByUsername === true,
             })
             return json(res, 200, { ok: true, ...r })
+          } catch (err) {
+            return json(res, 502, { ok: false, error: String(err?.message ?? err) })
+          }
+        }
+
+        // 看长期会话都绑在哪
+        if (req.method === 'GET' && url.pathname === '/astrbot/binds') {
+          try {
+            return json(res, 200, { ok: true, binds: await astrbot.listBinds() })
+          } catch (err) {
+            return json(res, 502, { ok: false, error: String(err?.message ?? err) })
+          }
+        }
+
+        // 某条 DSH 会话没用了 → 删掉它名下所有 AstrBot conversation
+        if (req.method === 'POST' && url.pathname === '/astrbot/drop-bound') {
+          const body = JSON.parse((await readBody(req)) || '{}')
+          const dshSessionId = String(body?.dshSessionId || '').trim()
+          if (!dshSessionId) return json(res, 400, { ok: false, error: 'dshSessionId 必填' })
+          try {
+            return json(res, 200, { ok: true, ...(await astrbot.dropBound(dshSessionId)) })
           } catch (err) {
             return json(res, 502, { ok: false, error: String(err?.message ?? err) })
           }
