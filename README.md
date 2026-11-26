@@ -135,7 +135,9 @@ DSH agent：du -sh /root/* | sort -h
 | 查 AstrBot 的会话列表 | 走 `/api/v1/conversations` |
 
 你只需要在 `~/.dsh/dsh-astrbot-unified/config.json` 里填 `astrbot_key`
-（在 AstrBot WebUI 里创建，勾 `im` 和 `chat` 权限）。
+（在 AstrBot WebUI 里创建，勾 `im` 和 `chat` 权限；想让 AstrBot 真的替你执行命令，
+还要再勾 `chat:admin`——不勾的话它只能聊天，一动手就是
+`Shell execution is disabled by the Local permission policy for this user role (member)`）。
 
 这样两个 agent 互相可调：
 
