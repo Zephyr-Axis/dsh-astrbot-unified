@@ -19,6 +19,9 @@ AstrBot 跑在同一台设备的另一个容器里，通过 HTTP 访问。
 ```
 
 `astrbot_key` 需要在 AstrBot 的 WebUI 里创建（设置 → API Key，勾选 `im` 和 `chat` 权限）。
+如果还想让 AstrBot 那边真的执行命令（而不是只聊天），要再勾 `chat:admin`；
+不勾的话它的 shell / python 工具会报
+`Shell execution is disabled by the Local permission policy for this user role (member)`。
 
 ## 让 AstrBot 的 LLM 回答
 
@@ -110,3 +113,9 @@ curl -X POST http://127.0.0.1:6185/api/v1/plugins/reload \
 
 - AstrBot 可能被系统杀掉，连不上时提示用户打开 App
 - 别把 `astrbot_key` 写进代码或提交到 git
+- `username` 不能填 AstrBot 管理员号（`admins_id` 里的），会报
+  `username is reserved for an AstrBot administrator`
+- 想让 AstrBot 真的执行命令，API Key 必须带 `chat:admin`；只有 `chat` 时
+  它的 shell / python 工具一律返回 `Permission denied`
+- AstrBot 的执行工具默认工作目录是它自己的 workspace（`/root/AstrBot/data/workspaces/...`），
+  不是 `/root/AstrBot`，用绝对路径
