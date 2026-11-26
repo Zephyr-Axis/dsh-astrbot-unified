@@ -25,24 +25,35 @@ AstrBot 跑在同一台设备的另一个容器里，通过 HTTP 访问。
 
 ## 让 AstrBot 的 LLM 回答
 
+**走本插件的 `/astrbot/ask`，不要直接 curl `/api/v1/chat`。**
+
 ```bash
-KEY=$(python3 -c "import json;print(json.load(open('$HOME/.dsh/dsh-astrbot-unified/config.json'))['astrbot_key'])")
-curl -sN -X POST http://127.0.0.1:6185/api/v1/chat \
-  -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
-  -d '{"message":[{"type":"plain","text":"你的问题"}],"session_id":"dsh-call","username":"dsh-call"}' \
-  | python3 -c "
-import json,sys
-for line in sys.stdin:
-    line=line.strip()
-    if not line.startswith('data: '): continue
-    try: ev=json.loads(line[6:])
-    except: continue
-    if ev.get('type')=='plain' and ev.get('streaming') and ev.get('chain_type')!='reasoning':
-        print(ev.get('data',''),end='')
-"
+TOKEN=$(python3 -c "import json;print(json.load(open('$HOME/.dsh/dsh-astrbot-unified/config.json'))['token'])")
+curl -s -X POST http://127.0.0.1:3188/astrbot/ask \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"text":"你的问题"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['text'])"
 ```
 
-这会走 AstrBot 自己的 LLM（带它的人格和工具），返回流式文本。
+区别在于：直接打 `/api/v1/chat` 每问一句都会在 AstrBot 里留一条 conversation，
+越堆越多还删不掉；`/astrbot/ask` 用一次性的临时 session，拿到答案后立刻把那条
+conversation 删掉。
+
+返回里的 `cleaned` 说明删没删成：
+
+```json
+{"ok":true,"text":"...","sessionId":"dsh-tmp-...","username":"dsh-bridge","cleaned":{"deleted":true,"cid":"..."}}
+```
+
+`cleaned.deleted` 是 `false` 也不影响结果——后台每 30 分钟按 TTL（默认 6 小时）
+扫一遍，把漏掉的临时会话清掉。
+
+想保留上下文（连续追问同一个话题）就自己传 `sessionId` 并加 `"keep": true`：
+
+```bash
+-d '{"text":"接着说","sessionId":"dsh-tmp-keep-1","keep":true}'
+```
+
+`keep` 的会话不会被自动删，要删手动 `POST /astrbot/drop {"sessionId":"..."}`。
 
 `username` 不能填 AstrBot 管理员（`admins_id` 里的号），否则会报
 `username is reserved for an AstrBot administrator`；用一个自己的名字即可，
@@ -107,6 +118,19 @@ AstrBot 的重载命令是 **`/plugin reload <插件名>`**，不是 `/reload`�
 curl -X POST http://127.0.0.1:6185/api/v1/plugins/reload \
   -H "Authorization: Bearer <JWT>" -H "Content-Type: application/json" \
   -d '{"plugin_id":"astrbot_plugin_dsh_unified"}'
+```
+
+## 排查
+
+```bash
+TOKEN=$(python3 -c "import json;print(json.load(open('$HOME/.dsh/dsh-astrbot-unified/config.json'))['token'])")
+
+# AstrBot 那边现在有哪些会话（temp=true 是没清掉的临时会话）
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3188/astrbot/conversations
+
+# 立刻扫一次（ttlMs=0 表示不管多新都删）
+curl -s -X POST http://127.0.0.1:3188/astrbot/sweep \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"ttlMs":0}'
 ```
 
 ## 注意
