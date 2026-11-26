@@ -8,7 +8,7 @@
 //   3. 万一进程挂了没删成，后台按 TTL 定期扫一遍兜底
 // 想保留上下文的调用方自己传 sessionId + keep。
 
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile, rename } from 'node:fs/promises'
 
 const WEBCHAT = 'webchat'
 const DEFAULT_URL = 'http://127.0.0.1:6185'
@@ -28,7 +28,88 @@ export function userIdOf(username, sessionId) {
   return `${WEBCHAT}:FriendMessage:${WEBCHAT}!${username}!${sessionId}`
 }
 
-export function createAstrBotOps({ configPath, logger }) {
+export function createAstrBotOps({ configPath, bindsPath, logger }) {
+  // ---------- 长期会话的绑定表 ----------
+  //
+  // 「保留连续会话」的语义是：这条 AstrBot conversation 跟着某条 DSH 会话走，
+  // DSH 那边删了才删。所以要把两者的 id 记下来。
+  //   { "session-xxx": [{"sessionId":"dsh-keep-...","username":"dsh-bridge","cid":"..."}] }
+
+  let binds = null
+
+  async function loadBinds() {
+    if (binds) return binds
+    try {
+      binds = JSON.parse(await readFile(bindsPath, 'utf8'))
+      if (!binds || typeof binds !== 'object' || Array.isArray(binds)) binds = {}
+    } catch {
+      binds = {}
+    }
+    return binds
+  }
+
+  async function saveBinds() {
+    const data = JSON.stringify(binds ?? {}, null, 2)
+    const tmp = `${bindsPath}.tmp`
+    await writeFile(tmp, data)
+    await rename(tmp, bindsPath)
+  }
+
+  /** 记住「这条 DSH 会话用了这条 AstrBot 会话」。 */
+  async function bind({ dshSessionId, sessionId, username }) {
+    if (!dshSessionId) return false
+    const b = await loadBinds()
+    const list = Array.isArray(b[dshSessionId]) ? b[dshSessionId] : []
+    if (!list.some((x) => x.sessionId === sessionId)) {
+      list.push({ sessionId, username, createdAt: Date.now() })
+      b[dshSessionId] = list
+      await saveBinds()
+    }
+    return true
+  }
+
+  /** 解绑（删掉记录，不删 AstrBot 侧）。 */
+  async function unbind({ dshSessionId, sessionId }) {
+    const b = await loadBinds()
+    const list = Array.isArray(b[dshSessionId]) ? b[dshSessionId] : []
+    const left = list.filter((x) => x.sessionId !== sessionId)
+    if (left.length) b[dshSessionId] = left
+    else delete b[dshSessionId]
+    await saveBinds()
+    return left.length !== list.length
+  }
+
+  /**
+   * DSH 会话被删了 → 把它名下所有 AstrBot conversation 一起删掉。
+   * 这就是「确定会话没用了才删」的落点：DSH 那边归档/删除是唯一判据。
+   */
+  async function dropBound(dshSessionId) {
+    const b = await loadBinds()
+    const list = Array.isArray(b[dshSessionId]) ? [...b[dshSessionId]] : []
+    if (!list.length) return { deleted: [], kept: 0 }
+    const deleted = []
+    const failed = []
+    for (const item of list) {
+      try {
+        const r = await dropSession({ sessionId: item.sessionId, username: item.username })
+        if (r.deleted) deleted.push(item.sessionId)
+      } catch (err) {
+        failed.push({ sessionId: item.sessionId, error: String(err?.message ?? err) })
+      }
+    }
+    // 删成功的解绑；删失败的留着，下一轮再试
+    b[dshSessionId] = list.filter((x) => failed.some((f) => f.sessionId === x.sessionId))
+    if (!b[dshSessionId].length) delete b[dshSessionId]
+    await saveBinds()
+    return { deleted, failed }
+  }
+
+  /** 列出绑定（排查用）。 */
+  async function listBinds() {
+    const b = await loadBinds()
+    return Object.entries(b).map(([dshSessionId, items]) => ({ dshSessionId, items }))
+  }
+
   /** 每次都重读 config.json：换 key 不用重启。 */
   async function creds() {
     try {
@@ -209,5 +290,8 @@ export function createAstrBotOps({ configPath, logger }) {
     return { scanned: list.length, matched: victims.length, deleted }
   }
 
-  return { creds, chat, listConversations, findConversation, deleteConversation, dropSession, sweepTemp }
+  return {
+    creds, chat, listConversations, findConversation, deleteConversation, dropSession, sweepTemp,
+    bind, unbind, dropBound, listBinds,
+  }
 }
