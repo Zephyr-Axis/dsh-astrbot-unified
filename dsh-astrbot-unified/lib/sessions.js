@@ -297,23 +297,15 @@ export function createSessionOps(ctx, mapping, config, logger) {
     if (open) closeTurn(s, open)          // 上一轮没等到回复，先收尾
     const turn = lastTurnNo(sessionId) + 1
     const step = 1
+    s.append('turn/start', { turn })
+    s.append('step/start', { turn, step })
     // 带 rpcId：客户端靠它把消息认成「用户提交的」，没有就不渲染成用户气泡
-    const msg = {
+    s.append('user/message', {
       id: randomUUID(),
       role: 'user',
-      content: [{ type: 'text', text }],
       source: { kind: 'user', rpcId: randomUUID() },
-    }
-    // 真实会话是「先投进 inbox 队列，再在回合里落成 surface 消息」：
-    //   agent/inbox/spliced(next-turn, inserted) → turn/start
-    //   → agent/inbox/spliced(next-turn, removedCount:1) → step/start → user/message
-    // 少了前面这两步，dsh-go 原生界面会把首条用户消息当成「唤醒提示」渲染成纯文本，
-    // 不画气泡（网页端不挑这个，所以只有 App 上看得到差别）。
-    s.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [msg] })
-    s.append('turn/start', { turn })
-    s.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] })
-    s.append('step/start', { turn, step })
-    s.append('user/message', msg, { surfaceOp: 'append' })
+      content: [{ type: 'text', text }],
+    }, { surfaceOp: 'append' })
     await flushSession(sessionId)
     return true
   }
@@ -349,20 +341,7 @@ export function createSessionOps(ctx, mapping, config, logger) {
     const turn = open?.turn ?? (Number.isSafeInteger(turnNo) && turnNo > 0 ? turnNo : lastTurnNo(sessionId) + 1)
     const step = open?.step || 1
     if (!open) {
-      // 没有开着的回合（重启后先收到助手回复）：自己起一个，也补上 inbox 那两步，
-      // 否则原生界面把这一轮当成「唤醒」渲染。
-      s.append('agent/inbox/spliced', {
-        target: 'next-turn',
-        start: 0,
-        inserted: [{
-          id: randomUUID(),
-          role: 'user',
-          content: [{ type: 'text', text }],
-          source: { kind: 'user', rpcId: randomUUID() },
-        }],
-      })
       s.append('turn/start', { turn })
-      s.append('agent/inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] })
       s.append('step/start', { turn, step })
     }
     // 关键：assistant/message 的校验强制要求 source.kind === 'model' + provider/model。
