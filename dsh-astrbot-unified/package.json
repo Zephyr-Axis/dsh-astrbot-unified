@@ -1,7 +1,7 @@
 {
   "name": "dsh-astrbot-unified",
-  "version": "0.2.0",
-  "description": "AstrBot ↔ DSH unified bridge: LLM-driven task execution, conversation mirror, self-cleaning reverse calls",
+  "version": "0.3.0",
+  "description": "AstrBot ↔ DSH unified bridge: LLM-driven task execution, mirror with real user bubbles, self-cleaning and DSH-bound long-lived reverse calls",
   "keywords": [
     "dsh",
     "dsh-plugin",
